@@ -157,6 +157,7 @@ def run_training():
       # Initialize the variables (the trained variables and the
       # epoch counter).
       sess.run(init_op)
+      writer = tf.summary.FileWriter(".", sess.graph)
       try:
         step = 0
         while True:  # Train until OutOfRangeError
@@ -169,13 +170,16 @@ def run_training():
           # the list passed to sess.run() and the value tensors
           # will be returned in the tuple from the call.
           _, loss_value = sess.run([train_op, loss])
-
+          #label = sess.run([label_batch])
+        
           duration = time.time() - start_time
 
           # Print an overview fairly often.
           if step % 100 == 0:
             print('Step %d: loss = %.2f (%.3f sec)' % (step, loss_value,
                                                        duration))
+            #print(len(label[0]))
+            
           step += 1
       except tf.errors.OutOfRangeError:
         print('Done training for %d epochs, %d steps.' % (FLAGS.num_epochs,

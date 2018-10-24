@@ -165,13 +165,90 @@ def average_gradients(tower_grads):
     average_grads.append(grad_and_var)
   return average_grads
 
+def model(X, reuse=False):
+    with tf.variable_scope('L1', reuse=reuse):
+        L1 = tf.layers.conv2d(X, 64, [3, 3], reuse=reuse)
+        L1 = tf.layers.max_pooling2d(L1, [2, 2], [2, 2])
+        L1 = tf.layers.dropout(L1, 0.7, True)
+
+    with tf.variable_scope('L2', reuse=reuse):
+        L2 = tf.layers.conv2d(L1, 128, [3, 3], reuse=reuse)
+        L2 = tf.layers.max_pooling2d(L2, [2, 2], [2, 2])
+        L2 = tf.layers.dropout(L2, 0.7, True)
+
+    with tf.variable_scope('L2-1', reuse=reuse):
+        L2_1 = tf.layers.conv2d(L2, 128, [3, 3], reuse=reuse)
+        L2_1 = tf.layers.max_pooling2d(L2_1, [2, 2], [2, 2])
+        L2_1 = tf.layers.dropout(L2_1, 0.7, True)
+
+    with tf.variable_scope('L3', reuse=reuse):
+        L3 = tf.contrib.layers.flatten(L2_1)
+        L3 = tf.layers.dense(L3, 1024, activation=tf.nn.relu)
+        L3 = tf.layers.dropout(L3, 0.5, True)
+
+    with tf.variable_scope('L4', reuse=reuse):
+        L4 = tf.layers.dense(L3, 256, activation=tf.nn.relu)
+
+    with tf.variable_scope('LF', reuse=reuse):
+        LF = tf.layers.dense(L4, 10, activation=None)
+
+    return LF
+
+def inference(images, hidden1_units, hidden2_units,reuse=False):
+  """Build the MNIST model up to where it may be used for inference.
+  Args:
+    images: Images placeholder, from inputs().
+    hidden1_units: Size of the first hidden layer.
+    hidden2_units: Size of the second hidden layer.
+  Returns:
+    softmax_linear: Output tensor with the computed logits.
+  """
+  import math
+  NUM_CLASSES = 10
+  IMAGE_SIZE = 28
+  IMAGE_PIXELS = IMAGE_SIZE * IMAGE_SIZE
+
+  ''' 
+  #correct way! using variablee scope when building graph only!"
+  # Hidden 1
+  with tf.variable_scope('hidden1'):
+    weights = tf.get_variable('weights',[IMAGE_PIXELS, hidden1_units])
+    biases = tf.get_variable('biases',[hidden1_units])
+    hidden1 = tf.nn.relu(tf.matmul(images, weights) + biases)
+    
+  # Hidden 2
+  with tf.variable_scope('hidden2'):
+    weights = tf.get_variable('weights',[hidden1_units, hidden2_units])
+    biases = tf.get_variable('biases',[hidden2_units])
+    hidden2 = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
+  # Linear
+  with tf.variable_scope('softmax_linear'):
+    weights = tf.get_variable('weights',[hidden2_units, NUM_CLASSES])
+    biases = tf.get_variable('biases',[NUM_CLASSES])
+    logits = tf.matmul(hidden2, weights) + biases
+  '''
+  
+  with tf.variable_scope('model',reuse=reuse):
+      weights = tf.get_variable('weights_1',[IMAGE_PIXELS, hidden1_units])
+      biases = tf.get_variable('biases_1',[hidden1_units])
+      hidden1 = tf.nn.relu(tf.matmul(images, weights) + biases)
+
+      weights = tf.get_variable('weights_2',[hidden1_units, hidden2_units])
+      biases = tf.get_variable('biases_2',[hidden2_units])
+      hidden2 = tf.nn.relu(tf.matmul(hidden1, weights) + biases)
+
+      weights = tf.get_variable('weights_3',[hidden2_units, NUM_CLASSES])
+      biases = tf.get_variable('biases_3',[NUM_CLASSES])
+      logits = tf.matmul(hidden2, weights) + biases
+    
+  return logits
 
 def run_training():
   with tf.Graph().as_default(), tf.device('/cpu:0'):
 
     # create optimizer and global step
-    self.global_step = tf.Variable(0, name='global_step',trainable=False)
-    opt = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    global_step = tf.Variable(0, name='global_step',trainable=False)
+    opt = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
 
     # prepare the training data batches
     image_batch, label_batch = inputs(
@@ -181,51 +258,83 @@ def run_training():
     tower_grads = []
 
     # now start building towers
-
+    
+    print("********",image_batch)
+        
+    tower_image_batch = tf.split(image_batch, 2)
+    tower_label_batch = tf.split(label_batch, 2)
+    
+    print("#"*50)
+    scope = tf.get_variable_scope()
+    print(scope.name)
+    print("#"*50)
+   
     with tf.variable_scope(tf.get_variable_scope()):
       for i in range(2):
         with tf.device('/gpu:%d' % i):
-          with tf.name_scope('%s_%d' % (tower, i)) as scope:
+          with tf.name_scope('%s_%d' % ("tower", i)) as scope:
 
             # create the model on each gpu
-            logits = mnist.inference(image_batch, FLAGS.hidden1, FLAGS.hidden2)
+            logits = inference(tower_image_batch[i], FLAGS.hidden1, FLAGS.hidden2,reuse=(i>0))
 
             # get the loss from each gpu
-            loss = mnist.loss(logits, label_batch)
+            loss = tf.losses.sparse_softmax_cross_entropy(labels=tower_label_batch[i], logits=logits,scope=scope)
+            #loss = mnist.loss(logits, tower_label_batch[i])
 
             # Reuse variables for the next tower.
-            tf.get_variable_scope().reuse_variables()
+            #tf.get_variable_scope().reuse_variables()
 
             # Calculate the gradients for the batch of data on this CIFAR tower.
+            #grads = opt.compute_gradients(loss,tf.trainable_variables(scope=scope))
+            
+            #grads = opt.compute_gradients(loss,tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope))
             grads = opt.compute_gradients(loss)
-
+                                          
             # Keep track of the gradients across all towers.
             tower_grads.append(grads)
 
     # We must calculate the mean of each gradient. Note that this is the
     # synchronization point across all towers.
+    
+    
+    for i in tower_grads:
+        print('*'*50)
+        for j in i:
+            print(j)
+        
     grads = average_gradients(tower_grads)
 
+    #grads = tower_grads[0]
+    #grad1 = tower_grads[0]
+    #grad2 = tower_grads[1]
+    #grad_mean = grads
+    
     apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
 
     MOVING_AVERAGE_DECAY = 0.9999
 
-    variable_averages = tf.train.ExponentialMovingAverage(
-        MOVING_AVERAGE_DECAY, global_step)
-    variables_averages_op = variable_averages.apply(tf.trainable_variables())
+    #variable_averages = tf.train.ExponentialMovingAverage(
+    #    MOVING_AVERAGE_DECAY, global_step)
+    #variables_averages_op = variable_averages.apply(tf.trainable_variables())
 
     # Group all updates to into a single train op.
-    train_op = tf.group(apply_gradient_op, variables_averages_op)
-
+    #train_op = tf.group(apply_gradient_op, variables_averages_op)
+    
+    train_op = apply_gradient_op
+    
     # now back to the regular
     # The op for initializing the variables.
     init_op = tf.group(tf.global_variables_initializer(),
                        tf.local_variables_initializer())
 
-    with tf.Session() as sess:
+    with tf.Session(config=tf.ConfigProto(
+        allow_soft_placement=True,
+        log_device_placement=False)) as sess:
+        
       # Initialize the variables (the trained variables and the
       # epoch counter).
       sess.run(init_op)
+      writer = tf.summary.FileWriter(".", sess.graph)
       try:
         step = 0
         while True:  # Train until OutOfRangeError
@@ -237,14 +346,23 @@ def run_training():
           # of your ops or variables, you may include them in
           # the list passed to sess.run() and the value tensors
           # will be returned in the tuple from the call.
+        
+          #g1,g2,gm = sess.run([grad1,grad2,grad_mean])
+          #label = sess.run([label_batch])
+          #_, loss_value,g1,g2,gm = sess.run([train_op, loss,grad1,grad2,grad_mean])
           _, loss_value = sess.run([train_op, loss])
-
+        
           duration = time.time() - start_time
-
+            
           # Print an overview fairly often.
           if step % 100 == 0:
             print('Step %d: loss = %.2f (%.3f sec)' % (step, loss_value,
                                                        duration))
+            #print("1",g1[0])
+            #print("2",g2[0])
+            #print("m",gm[0])
+            #print(len(label[0]))
+            
           step += 1
       except tf.errors.OutOfRangeError:
         print('Done training for %d epochs, %d steps.' % (FLAGS.num_epochs,
